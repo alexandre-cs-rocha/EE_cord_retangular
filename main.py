@@ -55,27 +55,29 @@ def erro(gabarito: np.ndarray, vet_estados: np.ndarray):
 def main():
     path = Path(__file__)
     CurrentFolder = path.parent
-    MasterFile = CurrentFolder / 'objs' / 'FRU03' / 'Master_DU06_202412380_FRU03_NTMBSR1PVTTR.dss'
+    MasterFile = CurrentFolder / 'objs' / 'EDPES' / 'Master_DU06_202412380_FUN03_NTMBSR1PVTTR.dss'
     "'4Bus-YY-Bal' / '4Bus-YY-Bal.dss'"
     "'13Bus' / 'IEEE13Nodeckt.dss'"
     "'123Bus'  / 'IEEE123Master.dss'"
-    "'8500-Node' / 'Master.dss'"
     "'ckt7' / 'Master_ckt7.dss'"
+    "'8500-Node' / 'Master.dss'"
     "'FGU04' / 'Master_DU06_202312380_FGU04_NTMBSR1PVTTR.dss'"
     "'FRU03' / 'Master_DU06_202412380_FRU03_NTMBSR1PVTTR.dss'"
     "'FRU07' / 'Master_DU06_202412380_FRU07_NTMBSR1PVTTR.dss'"
+    "'EDPES' / 'Master_DU06_202412380_FRU06_NTMBSR1PVTTR.dss'"
 
-    baseva = 1 * 1e5
+    baseva = 1 * 1e4
     verbose = True
 
     eesd = EESD.EESD(MasterFile, baseva, verbose)
 
     gabarito = get_gabarito(eesd)
+    gabarito[gabarito == 0] = 1e-10
     gabarito_n = gabarito_neutro(eesd)
     #eesd.vet_estados = gabarito.copy()
 
     inicio = time.time()
-    vet_estados = eesd.run(1e-5, 100)
+    vet_estados = eesd.run(1e-5, 30)
     fim = time.time()
 
     erro_abs, idx_abs, erro_rel, idx_rel, erro_med = erro(gabarito, vet_estados)

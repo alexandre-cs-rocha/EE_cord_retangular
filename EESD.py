@@ -20,11 +20,11 @@ class EESD():
         
         self.resolve_fluxo_carga()
         if self.verbose: print('Acabou o fluxo de carga')
-        
-        self.barras, self.num_medidas = self.medidas(self.baseva)
 
+        self.barras, self.num_medidas = self.medidas(self.baseva)
+        
         Ybus, node_order = self.get_Ybus(False)
-        Ybus = Ybus.tolil()
+        Ybus = Ybus.tocsr()
 
         self.Ybus, self.nodes = self.organiza_Ybus(Ybus)
         self.Ybus = self.Conserta_Ybus(self.Ybus)
@@ -391,27 +391,56 @@ class EESD():
         inj_pot_at = np.array(inj_pot_at)
         inj_pot_rat = np.array(inj_pot_rat)
 
-        idx_virtual = np.where(inj_pot_at == 0)[0]
         idx_medido = np.where(inj_pot_at != 0)[0]
 
-        Ir = np.zeros(len(idx_virtual))
-        Ii = np.zeros(len(idx_virtual))
-        medidas = np.concatenate([inj_pot_at[idx_medido], inj_pot_rat[idx_medido], tensoes, Ir, Ii])
+        zP = inj_pot_at[idx_medido]
+        zQ = inj_pot_rat[idx_medido]
+        zV = tensoes
 
-        dp = (medidas * 0.01) / (3 * 100)
-        dp[dp == 0] = 1e-5
+        classe = 0.01
+        fs_S = np.percentile(np.abs(np.concatenate([zP, zQ])), 90)
+
+        sP = classe * (np.abs(zP) + fs_S) / 3
+        sQ = classe * (np.abs(zQ) + fs_S) / 3
+        sV = np.full(len(zV), classe * 1.0 / 3)
+
+        dp = np.concatenate([sP, sQ, sV])
         pesos = dp**-2
-        pesos[pesos > 1e10] = 1e10
-        matriz_pesos = np.diag(pesos)
+        matriz_pesos = sp.diags(pesos).tocsr()
         
-        return sp.csr_matrix(matriz_pesos), np.abs(dp)
+        return matriz_pesos, np.abs(dp)
     
-    def run(self, max_error: float, max_iter: int) -> np.array:       
-        W = self.matriz_pesos
-        k = 0
+    def passo_kkt(self, H, r, w, n_med, lam=1e-8, eps=1e-10):
+        H = H.tocsr()
+        Hm, Hc = H[:n_med], H[n_med:]
+        rm, rc = r[:n_med], r[n_med:].copy()
+
+        nrm = np.sqrt(np.asarray(Hc.multiply(Hc).sum(axis=1)).ravel())
+        nrm[nrm == 0] = 1.0
+        Dn = sp.diags(1.0 / nrm)
+        Hc, rc = Dn @ Hc, rc / nrm
+
+        Gm = (Hm.T @ sp.diags(w) @ Hm).tocsc()
+        d = Gm.diagonal()
+        piso = 1e-6 * np.median(d[d > 0])
+        Gm = Gm + lam * sp.diags(np.maximum(d, piso))
+
+        s = np.sqrt(np.median(d[d > 0]))
+        Hc, rc = s * Hc, s * rc
+
+        nx, nc = Gm.shape[0], Hc.shape[0]
+        K = sp.bmat([[Gm,        Hc.T],
+                    [Hc, -eps * s**2 * sp.identity(nc)]], format='csc')
+        b = np.concatenate([Hm.T @ (w * rm), rc])
+
+        sol = splu(K).solve(b)
+        return sol[:nx]
+    
+    def run(self, max_error: float, max_iter: int) -> np.array:
+        self.iter = 0
         self.residuo = 1
         delx = 1
-        while(np.max(np.abs(delx)) > max_error and max_iter > k):
+        while(np.max(np.abs(delx)) > max_error and max_iter > self.iter):
             inicio = time.time()
             self.DSSCircuit.SetActiveBus(self.slack)
             Vr_ref = self.DSSCircuit.Buses.puVoltages[::2]
@@ -421,41 +450,34 @@ class EESD():
             Vi = np.concatenate([Vi_ref, self.vet_estados[len(self.vet_estados)//2:]])
 
             self.residuo, Ir, Ii = self.residuos.calc_res(self.Gs, self.Bs, Vr, Vi)
+            fim_res = time.time()
 
             idx_virtual = self.residuos.idx_virtual
             idx_medido = self.residuos.idx_medido
 
             J = self.jac.derivadas(self.Gs, self.Bs, Vr, Vi, Ir, Ii, idx_virtual, idx_medido)
-
-            fim_res = time.time()
-            idx = np.where(np.max(np.abs(self.residuo)) == np.abs(self.residuo))
-            
             fim_jac = time.time()
-            
-            Jt = J.T.tocsr()
-            
-            JtW = Jt.multiply(W.diagonal())
-            
-            G = JtW @ J
 
-            b = JtW @ self.residuo
+            n_med = len(self.residuo) - 2*len(idx_virtual)
 
-            solver = splu(G.tocsc())
-            delx = solver.solve(b)
+            delx = self.passo_kkt(J, self.residuo, self.dp, n_med)
 
             self.vet_estados += delx
             fim = time.time()
             
-            k += 1
+            self.iter += 1
+            if np.max(np.abs(self.residuo)) > 1e10:
+                raise RuntimeError('Estimador divergiu')
+
             if np.isnan(self.vet_estados.any()):
                 print('NaN na solução')
                 break
-            if k == 99:
+            if self.iter == 99:
                 print('Não convergiu')
             if self.verbose:
-                print(f'Os resíduos da iteração {k} levaram {fim_res-inicio:.3f}s')
-                print(f'A jacobiana da iteração {k} levou {fim_jac-fim_res:.3f}s')
-                print(f'Atualizar o vetor de estados da iteração {k} levou {fim-fim_jac:.3f}')
-                print(f'A iteração {k} levou {fim-inicio:.3f}s')
+                print(f'Os resíduos da iteração {self.iter} levaram {fim_res-inicio:.3f}s')
+                print(f'A jacobiana da iteração {self.iter} levou {fim_jac-fim_res:.3f}s')
+                print(f'Atualizar o vetor de estados da iteração {self.iter} levou {fim-fim_jac:.3f}')
+                print(f'A iteração {self.iter} levou {fim-inicio:.3f}s')
 
         return self.vet_estados

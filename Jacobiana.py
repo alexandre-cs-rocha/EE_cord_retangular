@@ -15,9 +15,10 @@ class Jacobiana():
         H_QVi = (-A + sp.diags(Ir))[3:, 3:][idx_medido, :]
 
         Vm = np.sqrt(Vr**2 + Vi**2)
+        Vm_s = np.where(Vm < 1e-8, 1, Vm)
 
-        H_VVr = sp.csr_matrix(sp.diags(Vr / Vm))[3:, 3:]
-        H_VVi = sp.csr_matrix(sp.diags(Vi / Vm))[3:, 3:]
+        H_VVr = sp.csr_matrix(sp.diags(Vr / Vm_s))[3:, 3:]
+        H_VVi = sp.csr_matrix(sp.diags(Vi / Vm_s))[3:, 3:]
 
         H_IrVr = Gs[3:, 3:][idx_virtual, :]
         H_IrVi = -Bs[3:, 3:][idx_virtual, :]
