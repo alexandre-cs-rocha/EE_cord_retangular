@@ -24,7 +24,13 @@ class Residuo():
         self._inj_at_ref  = np.array(inj_at)
         self._inj_rat_ref = np.array(inj_rat)
         self._tensao_ref  = np.array(tensoes)
+        #TODO: identificar as medicoes virtuais corretamente, por enquanto funciona.
         self.idx_virtual = np.where(self._inj_at_ref == 0)[0]
+        self.idx_virtual_2 = np.where(self._inj_rat_ref == 0)[0]
+        assert np.array_equal(
+            self.idx_virtual,
+            self.idx_virtual_2
+        )
         self.idx_medido = np.where(self._inj_at_ref != 0)[0]
 
     def calc_res(self, Gs: csr_matrix, Bs: csr_matrix, Vr: np.ndarray, Vi: np.ndarray) -> np.ndarray:
